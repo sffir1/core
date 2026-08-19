@@ -8,7 +8,11 @@ import { streamPatterns } from './streamPatterns.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-async function main() {
+let serverInstance: OMSSServer | null = null;
+
+export async function initServer() {
+    if (serverInstance) return serverInstance;
+
     const server = new OMSSServer({
         name: 'CinePro',
         version: '1.0.0',
@@ -56,17 +60,7 @@ async function main() {
         stremio: {
             // exposes a stremio addon on /stremio/manifest.json
             enableNativeAddon: process.env.STREMIO_ADDON === 'true',
-            // you can your own custom stremio addons as sources into cinepro.
             stremioAddons: []
-            /*
-            stremioAddons: [
-                {
-                    id: 'some-unique-id',
-                    url: 'https://example.com/manifest.json',
-                    enabled: true
-                }
-            ]
-            */
         },
 
         // MCP for AI agents
@@ -79,6 +73,12 @@ async function main() {
     const registry = server.getRegistry();
     await registry.discoverProviders(path.join(__dirname, './providers/'));
 
+    serverInstance = server;
+    return server;
+}
+
+export async function startServer() {
+    const server = await initServer();
     await server.start();
 
     const publicUrl =
@@ -97,7 +97,6 @@ async function main() {
 
     const lines = [title, '', repo, '', contrib, '', tryIt, '', note];
 
-    // compute box width based on longest line
     const width = Math.max(...lines.map((l) => l.length)) + 2;
 
     const borderTop = '╭' + '─'.repeat(width) + '╮';
@@ -114,6 +113,29 @@ ${borderBottom}
 `);
 }
 
-main().catch(() => {
-    process.exit(1);
-});
+// Cloudflare Workers ES Module Export
+export default {
+    async fetch(request: Request, env: Record<string, any>, ctx: any) {
+        if (env) {
+            Object.assign(process.env, env);
+        }
+
+        const server = await initServer();
+
+        if (typeof (server as any).fetch === 'function') {
+            return (server as any).fetch(request, env, ctx);
+        } else if ((server as any).app && typeof (server as any).app.fetch === 'function') {
+            return (server as any).app.fetch(request, env, ctx);
+        }
+
+        return new Response('CinePro Server Active', { status: 200 });
+    }
+};
+
+// Standalone execution for local development
+if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+    startServer().catch((err) => {
+        console.error(err);
+        process.exit(1);
+    });
+}
